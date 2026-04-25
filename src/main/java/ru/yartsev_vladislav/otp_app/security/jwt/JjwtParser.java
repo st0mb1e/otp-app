@@ -4,12 +4,10 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.JwtException;
-import io.jsonwebtoken.security.Keys;
 import org.springframework.stereotype.Component;
 import ru.yartsev_vladislav.otp_app.domain.Role;
 
 import javax.crypto.SecretKey;
-import java.nio.charset.StandardCharsets;
 
 @Component
 public class JjwtParser implements JwtParser {
@@ -17,11 +15,10 @@ public class JjwtParser implements JwtParser {
     private final io.jsonwebtoken.JwtParser parser;
     private final String expectedIssuer;
 
-    public JjwtParser(JwtProperties props) {
-        SecretKey key = Keys.hmacShaKeyFor(props.secret().getBytes(StandardCharsets.UTF_8));
+    public JjwtParser(SecretKey jwtSigningKey, JwtProperties props) {
         this.expectedIssuer = props.issuer();
         this.parser = Jwts.parser()
-                .verifyWith(key)
+                .verifyWith(jwtSigningKey)
                 .requireIssuer(props.issuer())
                 .build();
     }

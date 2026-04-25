@@ -1,12 +1,10 @@
 package ru.yartsev_vladislav.otp_app.security.jwt;
 
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.security.Keys;
 import org.springframework.stereotype.Component;
 import ru.yartsev_vladislav.otp_app.domain.Role;
 
 import javax.crypto.SecretKey;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Date;
 
@@ -16,9 +14,9 @@ public class JjwtIssuer implements JwtIssuer {
     private final SecretKey signingKey;
     private final JwtProperties props;
 
-    public JjwtIssuer(JwtProperties props) {
+    public JjwtIssuer(SecretKey jwtSigningKey, JwtProperties props) {
+        this.signingKey = jwtSigningKey;
         this.props = props;
-        this.signingKey = Keys.hmacShaKeyFor(props.secret().getBytes(StandardCharsets.UTF_8));
     }
 
     @Override
