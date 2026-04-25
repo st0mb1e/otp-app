@@ -1,0 +1,12 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: otp_app_postgres
+    environment:
+      POSTGRES_DB: otp_app
+      POSTGRES_USER: otp_user
+      POSTGRES_PASSWORD: otp_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
