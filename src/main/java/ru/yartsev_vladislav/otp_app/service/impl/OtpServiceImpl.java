@@ -131,6 +131,15 @@ public class OtpServiceImpl implements OtpService {
         return ValidateOtpResponse.ok();
     }
 
+    @Override
+    @Transactional
+    public void deleteOwnedCode(long userId, long codeId) {
+        OtpCode code = otpCodeRepository.findByIdAndUserId(codeId, userId)
+                .orElseThrow(() -> new NotFoundException("OTP code not found: " + codeId));
+        otpCodeRepository.delete(code);
+        log.info("OTP code id={} deleted by owner userId={}", codeId, userId);
+    }
+
     private void validateDestination(DeliveryChannel channel, String destination) {
         if (channel == DeliveryChannel.FILE) {
             return;

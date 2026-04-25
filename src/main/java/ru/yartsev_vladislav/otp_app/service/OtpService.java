@@ -10,4 +10,6 @@ public interface OtpService {
     GenerateOtpResponse generate(long userId, GenerateOtpRequest request);
 
     ValidateOtpResponse validate(long userId, ValidateOtpRequest request);
+
+    void deleteOwnedCode(long userId, long codeId);
 }

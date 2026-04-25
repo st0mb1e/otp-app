@@ -3,6 +3,8 @@ package ru.yartsev_vladislav.otp_app.controller;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -41,5 +43,12 @@ public class OtpController {
     public ValidateOtpResponse validate(@Valid @RequestBody ValidateOtpRequest request) {
         CurrentUser user = currentUserProvider.require();
         return otpService.validate(user.id(), request);
+    }
+
+    @DeleteMapping("/codes/{id}")
+    public ResponseEntity<Void> deleteOwnedCode(@PathVariable("id") long id) {
+        CurrentUser user = currentUserProvider.require();
+        otpService.deleteOwnedCode(user.id(), id);
+        return ResponseEntity.noContent().build();
     }
 }

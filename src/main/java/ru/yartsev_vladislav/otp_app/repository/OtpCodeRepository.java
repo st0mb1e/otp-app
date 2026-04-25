@@ -20,6 +20,8 @@ public interface OtpCodeRepository extends JpaRepository<OtpCode, Long> {
             OtpStatus status
     );
 
+    Optional<OtpCode> findByIdAndUserId(Long id, Long userId);
+
     long deleteByUserId(Long userId);
 
     @Modifying
