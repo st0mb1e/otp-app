@@ -253,7 +253,22 @@ DAO-слой поверх `JpaRepository`:
 
 ## Локальный запуск
 
-### 1. PostgreSQL
+### 1. Зависимости
+
+Локально нужны только JDK 17 и Docker (для PostgreSQL). Сам Gradle и
+все библиотеки (Spring Boot, Jakarta Mail, telegrambots, jsmpp,
+PostgreSQL JDBC и т. д.) подтягиваются автоматически - в репозитории
+лежит Gradle Wrapper. Принудительно скачать и закешировать
+зависимости можно командой:
+
+```bash
+./gradlew build -x test
+```
+
+Полный список зависимостей и их версии указаны в
+[`build.gradle`](build.gradle).
+
+### 2. PostgreSQL
 
 В корне репозитория находится готовый `docker-compose.yml`. Запуск:
 
@@ -264,7 +279,7 @@ docker compose up -d postgres
 По умолчанию: `localhost:5432`, БД `otp_app`, пользователь `otp_user`, пароль
 `otp_password` (эти же значения прописаны в `application.properties`).
 
-### 2. Сборка и запуск
+### 3. Сборка и запуск
 
 ```bash
 ./gradlew bootRun
@@ -272,7 +287,7 @@ docker compose up -d postgres
 
 Сервер запускается на `http://localhost:8080`.
 
-### 3. Конфигурация каналов доставки
+### 4. Конфигурация каналов доставки
 
 По умолчанию все "внешние" каналы (Email / Telegram / SMS) отключены:
 отправители стартуют в режиме `disabled` и при попытке отправки возвращают
