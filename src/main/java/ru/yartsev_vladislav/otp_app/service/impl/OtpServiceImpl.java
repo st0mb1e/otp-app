@@ -101,14 +101,14 @@ public class OtpServiceImpl implements OtpService {
     @Transactional
     public ValidateOtpResponse validate(long userId, ValidateOtpRequest request) {
         OtpCode active = otpCodeRepository
-                .findFirstByUserIdAndOperationIdAndStatusOrderByCreatedAtDesc(
-                        userId, request.operationId(), OtpStatus.ACTIVE
+                .findFirstByUserIdAndCodeAndStatusOrderByCreatedAtDesc(
+                        userId, request.code(), OtpStatus.ACTIVE
                 )
                 .orElse(null);
 
         if (active == null) {
-            log.info("OTP validation: no active code for userId={} operationId={}", userId, request.operationId());
-            return ValidateOtpResponse.invalid("No active code for this operation");
+            log.info("OTP validation: no active code matches for userId={}", userId);
+            return ValidateOtpResponse.invalid("Invalid code");
         }
 
         Instant now = Instant.now();
@@ -119,15 +119,10 @@ public class OtpServiceImpl implements OtpService {
             return ValidateOtpResponse.invalid("Code expired");
         }
 
-        if (!active.getCode().equals(request.code())) {
-            log.info("OTP validation: code mismatch for userId={} operationId={}", userId, request.operationId());
-            return ValidateOtpResponse.invalid("Wrong code");
-        }
-
         active.setStatus(OtpStatus.USED);
         otpCodeRepository.save(active);
         log.info("OTP validation OK: code id={} userId={} operationId={}",
-                active.getId(), userId, request.operationId());
+                active.getId(), userId, active.getOperationId());
         return ValidateOtpResponse.ok();
     }
 
