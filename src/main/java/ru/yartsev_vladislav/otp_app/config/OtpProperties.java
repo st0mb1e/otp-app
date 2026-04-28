@@ -9,7 +9,7 @@ import org.springframework.validation.annotation.Validated;
 @Validated
 @ConfigurationProperties(prefix = "app.otp")
 public record OtpProperties(
-        @NotBlank String fileOutput,
+        @NotBlank String fileOutputDir,
         @Min(4) @Max(10) int defaultCodeLength,
         @Min(10) long defaultTtlSeconds
 ) {
