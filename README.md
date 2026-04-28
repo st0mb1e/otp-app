@@ -43,22 +43,213 @@ src/main/java/ru/yartsev_vladislav/otp_app
 ```
 
 Архитектура классическая трёхслойная: контроллеры -> сервисы -> репозитории
-(`JpaRepository` поверх JDBC-драйвера PostgreSQL). Отправители вынесены в
-отдельный пакет; в `OtpServiceImpl` они внедряются как
-`List<OtpNotificationSender>` и сохраняются в
-`EnumMap<DeliveryChannel, OtpNotificationSender>`. Благодаря этому добавление
-нового канала сводится к созданию нового `@Component`, реализующего
-`OtpNotificationSender`.
+(`JpaRepository` поверх JDBC-драйвера PostgreSQL). Подробное описание
+каждого пакета приведено ниже в разделе "Документация по модулям".
 
 ### Таблицы БД (создаются автоматически через `ddl-auto=update`)
 
 - **`users`** - `id`, `login` (unique), `password_hash` (BCrypt), `role` (`ADMIN` / `USER`).
 - **`otp_config`** - таблица-синглтон (`id = 1`) с двумя полями: `code_length`,
-  `ttl_seconds`. Единственность записи обеспечивается тем, что код всегда
-  работает с фиксированным `SINGLETON_ID`.
+  `ttl_seconds`. Запись всегда одна: код обращается к ней по фиксированному
+  `SINGLETON_ID`.
 - **`otp_codes`** - `id`, `user_id`, `operation_id`, `code`, `status`
   (`ACTIVE` / `EXPIRED` / `USED`), `created_at`, `expires_at`. Индексы по
   `user_id`, `(status, expires_at)`, `operation_id`.
+
+## Документация по модулям
+
+Ниже перечислены все пакеты приложения, их состав и точки соприкосновения
+с другими пакетами.
+
+### Корневой пакет (`ru.yartsev_vladislav.otp_app`)
+
+- `OtpAppApplication` - точка входа с методом `main`. На класс навешены
+  `@SpringBootApplication`, `@ConfigurationPropertiesScan` (чтобы
+  Spring подхватил `OtpProperties` и `JwtProperties`) и
+  `@EnableScheduling` (для шедулера пометки просроченных кодов).
+
+### Пакет `config`
+
+- `OtpProperties` - record для префикса `app.otp` с полями
+  `fileOutputDir`, `defaultCodeLength` (4..10) и
+  `defaultTtlSeconds` (>= 10). Читается `OtpConfigServiceImpl` при
+  первом старте (для заполнения таблицы `otp_config`) и
+  `FileOtpNotificationSender` (для выбора каталога вывода).
+
+### Пакет `controller`
+
+Контроллеры являются единственным HTTP-входом в приложение. Поля DTO
+валидируются через `@Valid` и Bean Validation.
+
+- `AuthController` - публичные `POST /api/auth/register` и
+  `POST /api/auth/login`. Делегирует всё в `AuthService`.
+- `OtpController` - `/api/otp/*` под `@RequiresAuth(roles = USER)`.
+  Использует `OtpService` и `CurrentUserProvider`, чтобы получить
+  идентификатор текущего пользователя.
+- `AdminController` - `/api/admin/*` под `@RequiresAuth(roles = ADMIN)`.
+  Завязан на `OtpConfigService` (`get` / `update`) и
+  `UserAdminService` (список не-администраторов, удаление пользователя).
+- `GlobalExceptionHandler` - `@RestControllerAdvice`, который
+  превращает `NotFoundException`, `ConflictException`,
+  `ForbiddenException`, `UnauthorizedException`, ошибки валидации
+  Spring MVC и непредвиденные исключения в `ApiError` с нужным
+  HTTP-статусом.
+
+Бизнес-логики в контроллерах нет: они только разбирают HTTP-запрос,
+валидируют DTO и вызывают сервис.
+
+### Пакет `dto`
+
+Тела запросов и ответов API. Все DTO - record-классы. От JPA-сущностей
+DTO отделены, чтобы внутренняя схема БД и публичный контракт API
+менялись независимо.
+
+- `dto` (корень): `ApiError` - тело ошибки
+  (`status`, `error`, `message`, опциональный `details`).
+- `dto.auth`: `LoginRequest`, `RegisterRequest`, `RegisterResponse`,
+  `TokenResponse`.
+- `dto.otp`: `GenerateOtpRequest`, `GenerateOtpResponse`,
+  `ValidateOtpRequest`, `ValidateOtpResponse`.
+- `dto.admin`: `OtpConfigRequest`, `OtpConfigResponse`, `UserResponse`.
+
+### Пакет `domain`
+
+JPA-сущности `User`, `OtpCode`, `OtpConfig` (поля и индексы перечислены
+выше в разделе "Таблицы БД") и перечисления:
+
+- `OtpStatus` - `ACTIVE`, `EXPIRED`, `USED`.
+- `DeliveryChannel` - `SMS`, `EMAIL`, `TELEGRAM`, `FILE`.
+- `Role` - `ADMIN`, `USER`.
+
+### Пакет `exception`
+
+Доменные исключения, на которые опирается `GlobalExceptionHandler`:
+
+- `NotFoundException` - 404 (нет пользователя, OTP-кода и т. п.).
+- `ConflictException` - 409 (например, повторная регистрация
+  администратора).
+- `UnauthorizedException` - 401 (нет или невалидный JWT).
+- `ForbiddenException` - 403 (роль не подходит, попытка удалить
+  администратора и т. д.).
+
+Бросаются из сервисов, JWT-фильтра и интерсептора авторизации.
+
+### Пакет `repository`
+
+DAO-слой поверх `JpaRepository`:
+
+- `UserRepository` - поиск по `login`, проверка наличия администратора,
+  выборка списка не-администраторов.
+- `OtpCodeRepository` - поиск активного кода пользователя по значению,
+  поиск кода по паре `(id, userId)`, удаление всех кодов пользователя.
+- `OtpConfigRepository` - стандартный `JpaRepository<OtpConfig, Long>`.
+
+Кроме определения запросов, ничего, кроме работы с сущностями,
+репозитории не делают.
+
+### Пакет `security` и подпакет `security.jwt`
+
+Здесь собрана аутентификация (JWT) и проверка ролей.
+
+В пакете `security`:
+
+- `WebSecurityConfig` - регистрирует `JwtAuthenticationFilter`
+  (`FilterRegistrationBean`) и подключает `AuthorizationInterceptor`
+  на путях `/api/**`.
+- `JwtAuthenticationFilter` - читает заголовок
+  `Authorization: Bearer ...`, отдаёт его в `JwtParser` и при успехе
+  кладёт `CurrentUser` в атрибуты запроса.
+- `PasswordEncoderConfig` - bean `BCryptPasswordEncoder` для
+  хеширования паролей.
+- `CurrentUser` - record с `id`, `login`, `role`.
+- `CurrentUserProvider` и реализация `RequestScopedCurrentUserProvider`
+  - достают текущего пользователя из атрибутов запроса.
+- `RequiresAuth` - аннотация над контроллером/методом со списком
+  допустимых ролей.
+- `AuthAttributes` - константы ключей в атрибутах запроса.
+- `AuthorizationInterceptor` - `HandlerInterceptor`. Если у обработчика
+  стоит `RequiresAuth`, проверяет роль текущего пользователя и при
+  необходимости бросает `UnauthorizedException` или
+  `ForbiddenException`.
+
+В подпакете `security.jwt`:
+
+- `JwtProperties` - record с `secret`, `ttl`, `issuer`.
+- `JwtKeyConfig` - формирует `SecretKey` (HMAC-SHA256) из значения
+  секрета.
+- `JwtIssuer` и `JjwtIssuer` - выдача JWT по `userId`, `login`, `role`.
+  Используется в `AuthServiceImpl`.
+- `JwtParser` и `JjwtParser` - проверка подписи, издателя и срока
+  действия токена. Используется в `JwtAuthenticationFilter`.
+- `JwtClaims` и `IssuedToken` - record-результаты разбора и выдачи
+  токена.
+
+### Пакет `service` (интерфейсы)
+
+Контракт бизнес-логики, на который опираются контроллеры:
+
+- `AuthService` - `register`, `login`.
+- `OtpService` - `generate`, `validate`, `deleteOwnedCode`.
+- `OtpConfigService` - `get`, `update`.
+- `UserAdminService` - `listNonAdminUsers`, `deleteUser`.
+
+### Пакет `service.impl`
+
+Реализации сервисов. Все методы, изменяющие БД, помечены
+`@Transactional`.
+
+- `AuthServiceImpl` - регистрация (с проверкой уникальности `login` и
+  запретом второй регистрации администратора) и аутентификация
+  (BCrypt + выпуск JWT через `JwtIssuer`).
+- `OtpServiceImpl` - основной сервис. В конструктор приходит список
+  всех бинов `OtpNotificationSender`, они сохраняются в
+  `EnumMap<DeliveryChannel, OtpNotificationSender>` для быстрого
+  доступа по каналу. `generate` создаёт код заданной длины и TTL
+  (берёт значения из `OtpConfigService`), сохраняет его со статусом
+  `ACTIVE` и вызывает нужный sender. `validate` ищет активный код
+  пользователя по значению; если срок истёк - переводит в `EXPIRED`,
+  при успехе - в `USED`. `deleteOwnedCode` удаляет код, проверив,
+  что он принадлежит текущему пользователю.
+- `OtpConfigServiceImpl` - работа с таблицей `otp_config`. При
+  отсутствии записи создаёт её на основе `OtpProperties`. `update`
+  позволяет администратору менять длину кода и TTL без перезапуска
+  приложения.
+- `UserAdminServiceImpl` - `listNonAdminUsers` возвращает всех
+  пользователей с ролью `USER`; `deleteUser` сначала удаляет коды
+  пользователя через `OtpCodeRepository.deleteByUserId`, затем самого
+  пользователя. Удалить администратора нельзя - бросается
+  `ForbiddenException`.
+
+### Пакет `service.notification`
+
+Реализация четырёх каналов доставки. Каналы подключаются по
+интерфейсу `OtpNotificationSender`, поэтому новый канал добавляется
+без изменений в `OtpServiceImpl`.
+
+- `OtpNotificationSender` - интерфейс с `channel(): DeliveryChannel`
+  и `send(NotificationPayload)`.
+- `NotificationPayload` - record с данными для отправки:
+  `userId`, `login`, `operationId`, `code`, `destination`,
+  `expiresAt`.
+- `FileOtpNotificationSender` (`FILE`) - дописывает строку с кодом в
+  файл `operation-<operationId>-otp.txt` в каталоге
+  `app.otp.file-output-dir`.
+- `EmailOtpNotificationSender` (`EMAIL`) - SMTP через Jakarta Mail
+  (Angus Mail), параметры из `app.email.*`.
+- `SmsOtpNotificationSender` (`SMS`) - SMPP через jsmpp, параметры из
+  `app.sms.smpp.*`. Проверялся на эмуляторе SMPPsim.
+- `TelegramOtpNotificationSender` (`TELEGRAM`) - отправка через
+  `telegrambots-client`. Параллельно крутится long-polling
+  обработчик, отвечающий пользователю его `chat id`, который дальше
+  передаётся в поле `destination`.
+
+### Пакет `service.scheduler`
+
+- `OtpExpirationScheduler` - `@Scheduled`-задача. С интервалом
+  `app.otp.expiration-scan-interval` вызывает
+  `OtpCodeRepository.markExpired(ACTIVE, EXPIRED, now)` и логирует
+  количество переведённых строк, чтобы активные коды с истёкшим
+  `expiresAt` не оставались в БД до следующего вызова `validate`.
 
 ## Локальный запуск
 
@@ -85,8 +276,8 @@ docker compose up -d postgres
 
 По умолчанию все "внешние" каналы (Email / Telegram / SMS) отключены:
 отправители стартуют в режиме `disabled` и при попытке отправки возвращают
-`500` с сообщением о причине. Это сделано намеренно, чтобы приложение можно
-было запустить без секретов и сразу проверить канал `FILE`.
+`500` с сообщением о причине. Так приложение запускается без секретов, и
+сразу можно проверить канал `FILE`.
 
 Все настройки читаются стандартным механизмом Spring (`@Value`), поэтому
 переопределить любое значение можно одним из штатных способов: через
@@ -134,21 +325,6 @@ MAIL_SMTP_PORT=587 \
 4. Веб-интерфейс SMPPsim (по умолчанию `http://localhost:88`) показывает
    принятые сообщения.
 
-#### Файл (включён всегда)
-
-Канал `FILE` работает без настройки: для каждого `operationId` создаётся файл
-`operation-<operationId>-otp.txt` в директории `app.otp.file-output-dir` (по
-умолчанию `.` - корень проекта). Если файл уже существует (повторная
-генерация для той же операции), новая строка дописывается в конец.
-
-#### Фоновая пометка просроченных кодов
-
-В приложении реализован шедулер `OtpExpirationScheduler`, который раз в заданный интервал переводит все
-активные OTP-коды с истёкшим `expires_at` в статус `EXPIRED`.
-Период запуска и задержка перед первой итерацией задаются в
-`application.properties` свойствами `app.otp.expiration-scan-interval` и
-`app.otp.expiration-scan-initial-delay`.
-
 #### Прочая конфигурация
 
 | Ключ | Назначение | Значение по умолчанию |
@@ -160,12 +336,6 @@ MAIL_SMTP_PORT=587 \
 | `app.otp.file-output-dir` | директория для файлов канала `FILE` | `.` |
 | `app.otp.expiration-scan-interval` | период запуска шедулера, помечающего просроченные коды (ISO-8601 `Duration`) | `PT1M` |
 | `app.otp.expiration-scan-initial-delay` | задержка перед первым запуском шедулера после старта приложения | `PT10S` |
-
-Авторизация по ролям реализована собственной аннотацией
-`@RequiresAuth(roles = ...)` на контроллерах и интерсептором
-`AuthorizationInterceptor`. `ADMIN` не имеет доступа к пользовательским
-OTP-эндпоинтам и наоборот - это сделано намеренно, чтобы границы ролей
-оставались строгими.
 
 ## API
 
