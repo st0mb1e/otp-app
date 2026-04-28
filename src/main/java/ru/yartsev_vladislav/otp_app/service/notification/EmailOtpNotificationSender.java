@@ -18,6 +18,19 @@ import ru.yartsev_vladislav.otp_app.domain.DeliveryChannel;
 import java.time.format.DateTimeFormatter;
 import java.util.Properties;
 
+/**
+ * Отправляет OTP-код пользователю на почту по SMTP. Под капотом Jakarta Mail
+ * (Angus Mail), всё что нужно - это собрать Properties с mail.smtp.* ключами
+ * и отдать их в Session.getInstance
+ *
+ * Все настройки тянем стандартным @Value из application.properties, туда они
+ * приходят либо из env-переменных, либо из system properties, либо из самого
+ * файла, как Spring найдёт первым
+ *
+ * Если логин или пароль пустые, считается что почта не настроена: бин всё равно
+ * создаём (чтобы приложение поднялось), но при попытке отправить письмо
+ * получим ошибку
+ */
 @Component
 public class EmailOtpNotificationSender implements OtpNotificationSender {
 
@@ -58,11 +71,11 @@ public class EmailOtpNotificationSender implements OtpNotificationSender {
                     return new PasswordAuthentication(authUser, pwd);
                 }
             });
-            log.info("Email OTP sender initialized (smtp host={}, port={}, from={})",
+            log.info("Email sender started (smtp host={}, port={}, from={})",
                     smtpHost, smtpPort, fromEmail);
         } else {
             this.session = null;
-            log.warn("Email OTP sender is disabled");
+            log.warn("Email sender is off: app.email.username and/or app.email.password are not set");
         }
     }
 
@@ -75,7 +88,8 @@ public class EmailOtpNotificationSender implements OtpNotificationSender {
     public void send(NotificationPayload payload) {
         if (!enabled) {
             throw new IllegalStateException(
-                    "Email channel is not configured (set app.email.username / app.email.password)");
+                    "EMAIL channel is not configured, set app.email.username and app.email.password"
+            );
         }
         InternetAddress to = parseAddress(payload.destination());
         InternetAddress from = parseAddress(fromEmail);
@@ -84,22 +98,25 @@ public class EmailOtpNotificationSender implements OtpNotificationSender {
             Message message = new MimeMessage(session);
             message.setFrom(from);
             message.setRecipient(Message.RecipientType.TO, to);
-            message.setSubject("Your OTP Code");
+            message.setSubject("Your verification code");
             message.setText(buildBody(payload));
 
             Transport.send(message);
 
-            log.info("OTP email sent to {} for userId={} operationId={}",
+            log.info("OTP sent to {} (userId={} operationId={})",
                     payload.destination(), payload.userId(), payload.operationId());
         } catch (MessagingException ex) {
             throw new IllegalStateException(
-                    "Failed to send OTP email to " + payload.destination(), ex);
+                    "could not send OTP to " + payload.destination(), ex);
         }
     }
 
     private String buildBody(NotificationPayload p) {
         StringBuilder sb = new StringBuilder();
-        sb.append("Your verification code is: ").append(p.code()).append(System.lineSeparator());
+        sb.append("Your verification code: ").append(p.code()).append(System.lineSeparator());
+        if (p.operationId() != null && !p.operationId().isBlank()) {
+            sb.append("Operation: ").append(p.operationId()).append(System.lineSeparator());
+        }
         if (p.expiresAt() != null) {
             sb.append("Expires at: ")
                     .append(DateTimeFormatter.ISO_INSTANT.format(p.expiresAt()))
@@ -112,10 +129,11 @@ public class EmailOtpNotificationSender implements OtpNotificationSender {
         try {
             return new InternetAddress(raw, true);
         } catch (AddressException ex) {
-            throw new IllegalArgumentException("Invalid email address: " + raw, ex);
+            throw new IllegalArgumentException("invalid email address: " + raw, ex);
         }
     }
 
+    /** Собирает Properties с mail.smtp.* ключами, которые ждёт Jakarta Mail */
     private static Properties toJavaMailProperties(
             String host,
             int port,
